@@ -21,6 +21,9 @@ const MINS={hk:{o:[1,2,3],d:3},sg:{o:[1,2,3],d:1},my:{o:[3,4,5],d:3},tw:{o:[0,1,
 const TURN_MS=+process.env.PONGIE_TURN_MS||30000,CLAIM_MS=+process.env.PONGIE_CLAIM_MS||15000,K=+process.env.PONGIE_TIME_SCALE||1,sleep=ms=>new Promise(r=>setTimeout(r,ms*K));
 const send=(ws,o)=>{try{if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}catch(e){}};
 const clean=(s,n)=>String(s||'').replace(/[<>&"'`]/g,'').trim().slice(0,n);
+const PROTO=2,MINPROTO=2,REPORTS=[];
+const FCA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',fcode=id=>{let a=2166136261,b=5381;const s=String(id)+'|pongie';for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a^=c;a=Math.imul(a,16777619)>>>0;b=(Math.imul(b,33)^c)>>>0}let o='';for(let i=0;i<4;i++)o+=FCA[(a>>>(i*5))&31];for(let i=0;i<4;i++)o+=FCA[(b>>>(i*5))&31];return o.slice(0,4)+'-'+o.slice(4)};
+const FCM=new Map();
 const cleanName=s=>{const n=clean(s,14);return BAD.test(n.replace(/[\s._-]+/g,''))?'Player':n};
 const AVOK=['🐉','🐯','🐼','🐲','🧧','🏮','🥟','🀄','🐓','🐒','🐇','🐂','🐍','🐑','🦁','🍵','🎋','🍜','🦄','🦚','🐅','🦉','🐙','🦊','🐬','🦋'];
 const AIP=[{name:'Auntie Liu',av:'👵',persona:1},{name:'Uncle Wong',av:'👴',persona:2},{name:'Ah Fai',av:'👲',persona:3}];
@@ -84,7 +87,11 @@ function leaveRoom(ws){const r=ws.room;if(!r)return;ws.room=null;
 
 wss.on('connection',ws=>{ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;ws.on('pong',()=>ws.alive=true);
  ws.on('message',buf=>{let m;try{m=JSON.parse(buf)}catch(e){return}if(!m||typeof m.t!='string')return;
-  if(m.t=='hello'){ws.uid=clean(m.id,24)||('g'+Math.random().toString(36).slice(2,8));ws.name=cleanName(m.name)||'Player';ws.av=AVOK.includes(m.av)?m.av:'🐉';send(ws,{t:'hi',v:1});return}
+  if(m.t=='report'){const r=ws.room,t=r&&r.seats[m.seat|0];if(t&&!t.ai&&t.id!==ws.uid){const rec={at:new Date().toISOString(),room:r.code,by:ws.uid,target:t.id,name:t.name};REPORTS.push(rec);if(REPORTS.length>500)REPORTS.shift();console.log('REPORT',JSON.stringify(rec))}return}
+  if(m.t=='hello'){if(m.v!=null&&(m.v|0)<MINPROTO){send(ws,{t:'old'});setTimeout(()=>{try{ws.close()}catch(e){}},200);return}ws.proto=m.v|0;ws.uid=clean(m.id,24)||('g'+Math.random().toString(36).slice(2,8));ws.name=cleanName(m.name)||'Player';ws.av=AVOK.includes(m.av)?m.av:'🐉';ws.fc=fcode(ws.uid);ws.hide=!!m.hide;FCM.set(ws.fc,ws);send(ws,{t:'hi',v:PROTO,min:MINPROTO,fc:ws.fc});return}
+  if(m.t=='fq'){const l=[];(Array.isArray(m.c)?m.c.slice(0,60):[]).forEach(c=>{const w=FCM.get(String(c));if(w&&w!==ws&&!w.hide&&w.readyState===1)l.push({c:String(c),n:w.name,a:w.av,s:w.room?(w.room.started?'game':'room'):'on'})});send(ws,{t:'fs',l});return}
+  if(m.t=='hide'){ws.hide=!!m.on;return}
+  if(m.t=='inv'){const now=Date.now();if(now-(ws.ia||0)<3000)return;ws.ia=now;const r=ws.room,w=FCM.get(String(m.to));if(r&&!r.started&&w&&w!==ws&&!w.hide&&w.readyState===1&&w.room!==r)send(w,{t:'inv',n:ws.name,a:ws.av,f:ws.fc,code:r.code});return}
   if(!ws.uid)return;
   if(m.t=='qm'){const sty=MINS[m.sty]?m.sty:'hk';leaveRoom(ws);qmRemove(ws);ws.qm=sty;ws.qt=Date.now();if(!qmq.has(sty))qmq.set(sty,[]);qmq.get(sty).push(ws);send(ws,{t:'qm',on:1,n:qmq.get(sty).length,ms:0});return}
   if(m.t=='qmc'){qmRemove(ws);send(ws,{t:'qm',off:1});return}
@@ -107,6 +114,6 @@ wss.on('connection',ws=>{ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;w
   if(m.t=='next'){if(r.ready){r.ready.add(ws.seat);if(r.nextChk)r.nextChk()}return}
   if(m.t=='leave'){leaveRoom(ws);send(ws,{t:'left'});return}
  });
- ws.on('close',()=>{qmRemove(ws);leaveRoom(ws)})});
+ ws.on('close',()=>{if(ws.fc&&FCM.get(ws.fc)===ws)FCM.delete(ws.fc);qmRemove(ws);leaveRoom(ws)})});
 setInterval(()=>{wss.clients.forEach(ws=>{if(!ws.alive){ws.terminate();return}ws.alive=false;try{ws.ping()}catch(e){}})},25000);
 server.listen(PORT,()=>console.log('Pongie server on port '+PORT));
