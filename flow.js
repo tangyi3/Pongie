@@ -3,7 +3,7 @@
 const IO={};
 function srvSetup(cfg){const o=JSON.parse(JSON.stringify(PERS.slice(1,4)));
  U.set.sty=cfg.sty;if(cfg.sty=='hk')U.set.min=cfg.min;else if(U.set.mn[cfg.sty]!=null)U.set.mn[cfg.sty]=cfg.min;
- U.set.lv=cfg.lv;U.set.seat=[0,0,0];U.set.sw=cfg.sw==1?1:3;U.set.hf=0;U.set.an=cfg.an==0?0:1;onl.playing=1;inTut=0;lvForce=0;
+ U.set.lv=cfg.lv;U.set.seat=[0,0,0];U.set.sw=cfg.sw==1?1:3;U.set.hf=1;U.set.an=cfg.an==0?0:1;onl.playing=1;inTut=0;lvForce=0;
  for(let q=0;q<4;q++)PERS[q]=o[(IO.persona[q]||1)-1];
  setRS();S=Array(4).fill(cfg.stack||300);RD={n:0,h:0,max:cfg.len,ds:0};dealer=IO.dealer0}
 function srvSnap(seat,drew){return{t:'st',dealer,turn:IO.turn,wall:W.length-RS.dead,S,M,pools,lastP,hc:H.map(h=>h.length),hand:H[seat],drew:drew===seat,RD,min:MIN,FL,QS,won,sty:RS.id}}

@@ -5,14 +5,16 @@ const {WebSocketServer}=require('ws');
 const sbx=require('./sandbox');
 sbx.load(path.join(__dirname,'public'));
 const PORT=process.env.PORT||3000;
+process.on('uncaughtException',e=>{console.error('uncaught',e&&e.stack||e)});process.on('unhandledRejection',e=>{console.error('unhandled',e&&e.stack||e)});
 const PUB=path.join(__dirname,'public');
 const MIME={'.html':'text/html; charset=utf-8','.js':'text/javascript','.json':'application/json','.webmanifest':'application/manifest+json','.png':'image/png','.svg':'image/svg+xml','.ico':'image/x-icon'};
 const server=http.createServer((req,res)=>{
- let u=decodeURIComponent((req.url||'/').split('?')[0]);
+ let u;try{u=decodeURIComponent((req.url||'/').split('?')[0])}catch(e){res.statusCode=400;res.end('Bad request');return}
+ if(u.indexOf('\0')>=0){res.statusCode=400;res.end();return}
  if(u=='/healthz'){res.end('ok');return}
  if(u=='/')u='/index.html';
  const f=path.normalize(path.join(PUB,u));
- if(!f.startsWith(PUB)){res.statusCode=403;res.end();return}
+ if(f!==PUB&&!f.startsWith(PUB+path.sep)){res.statusCode=403;res.end();return}
  fs.readFile(f,(e,d)=>{if(e){res.statusCode=404;res.end('Not found');return}res.setHeader('Content-Type',MIME[path.extname(f)]||'application/octet-stream');if(u=='/sw.js')res.setHeader('Cache-Control','no-cache');res.end(d)})});
 const wss=new WebSocketServer({server,maxPayload:4096});
 const rooms=new Map();
@@ -21,9 +23,9 @@ const MINS={hk:{o:[1,2,3],d:3},sg:{o:[1,2,3],d:1},my:{o:[3,4,5],d:3},tw:{o:[0,1,
 const TURN_MS=+process.env.PONGIE_TURN_MS||30000,CLAIM_MS=+process.env.PONGIE_CLAIM_MS||15000,K=+process.env.PONGIE_TIME_SCALE||1,sleep=ms=>new Promise(r=>setTimeout(r,ms*K));
 const send=(ws,o)=>{try{if(ws&&ws.readyState===1)ws.send(JSON.stringify(o))}catch(e){}};
 const clean=(s,n)=>String(s||'').replace(/[<>&"'`]/g,'').trim().slice(0,n);
-const PROTO=2,MINPROTO=2,REPORTS=[];
+const PROTO=3,MINPROTO=3,REPORTS=[];
 const FCA='ABCDEFGHJKLMNPQRSTUVWXYZ23456789',fcode=id=>{let a=2166136261,b=5381;const s=String(id)+'|pongie';for(let i=0;i<s.length;i++){const c=s.charCodeAt(i);a^=c;a=Math.imul(a,16777619)>>>0;b=(Math.imul(b,33)^c)>>>0}let o='';for(let i=0;i<4;i++)o+=FCA[(a>>>(i*5))&31];for(let i=0;i<4;i++)o+=FCA[(b>>>(i*5))&31];return o.slice(0,4)+'-'+o.slice(4)};
-const FCM=new Map();
+const FCM=new Map(),PEND=new Map(),DECL=new Set(),FRE=/^[A-HJ-NP-Z2-9]{4}-[A-HJ-NP-Z2-9]{4}$/;
 const cleanName=s=>{const n=clean(s,14);return BAD.test(n.replace(/[\s._-]+/g,''))?'Player':n};
 const AVOK=['🐉','🐯','🐼','🐲','🧧','🏮','🥟','🀄','🐓','🐒','🐇','🐂','🐍','🐑','🦁','🍵','🎋','🍜','🦄','🦚','🐅','🦉','🐙','🦊','🐬','🦋'];
 const AIP=[{name:'Auntie Liu',av:'👵',persona:1},{name:'Uncle Wong',av:'👴',persona:2},{name:'Ah Fai',av:'👲',persona:3}];
@@ -85,12 +87,17 @@ function leaveRoom(ws){const r=ws.room;if(!r)return;ws.room=null;
  const left=r.seats.some(x=>x&&!x.ai&&x.ws&&x.ws.readyState===1);
  if(!left){r.dead=true;setTimeout(()=>rooms.delete(r.code),1000)}else{if(!r.started&&r.host===ws.uid){const n=r.seats.find(x=>x&&!x.ai&&x.ws);if(n)r.host=n.id}pushRoom(r)}}
 
-wss.on('connection',ws=>{ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;ws.on('pong',()=>ws.alive=true);
- ws.on('message',buf=>{let m;try{m=JSON.parse(buf)}catch(e){return}if(!m||typeof m.t!='string')return;
+wss.on('error',e=>console.error('wss',e&&e.message));
+server.on('clientError',(e,sock)=>{try{sock.destroy()}catch(x){}});
+wss.on('connection',ws=>{ws.on('error',()=>{});ws.mc=0;ws.mt=Date.now();ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;ws.on('pong',()=>ws.alive=true);
+ ws.on('message',buf=>{const now=Date.now();if(now-ws.mt>1000){ws.mt=now;ws.mc=0}if(++ws.mc>40){if(ws.mc==41){try{ws.close(1008,'rate')}catch(e){}}return}let m;try{m=JSON.parse(buf)}catch(e){return}if(!m||typeof m!='object'||typeof m.t!='string')return;try{handleMsg(ws,m)}catch(e){console.error('msg error',m&&m.t,e&&e.message)}});
+function handleMsg(ws,m){
   if(m.t=='report'){const r=ws.room,t=r&&r.seats[m.seat|0];if(t&&!t.ai&&t.id!==ws.uid){const rec={at:new Date().toISOString(),room:r.code,by:ws.uid,target:t.id,name:t.name};REPORTS.push(rec);if(REPORTS.length>500)REPORTS.shift();console.log('REPORT',JSON.stringify(rec))}return}
-  if(m.t=='hello'){if(m.v!=null&&(m.v|0)<MINPROTO){send(ws,{t:'old'});setTimeout(()=>{try{ws.close()}catch(e){}},200);return}ws.proto=m.v|0;ws.uid=clean(m.id,24)||('g'+Math.random().toString(36).slice(2,8));ws.name=cleanName(m.name)||'Player';ws.av=AVOK.includes(m.av)?m.av:'🐉';ws.fc=fcode(ws.uid);ws.hide=!!m.hide;FCM.set(ws.fc,ws);send(ws,{t:'hi',v:PROTO,min:MINPROTO,fc:ws.fc});return}
+  if(m.t=='hello'){if(m.v!=null&&(m.v|0)<MINPROTO){send(ws,{t:'old'});setTimeout(()=>{try{ws.close()}catch(e){}},200);return}ws.proto=m.v|0;ws.uid=clean(m.id,24)||('g'+Math.random().toString(36).slice(2,8));ws.name=cleanName(m.name)||'Player';ws.av=AVOK.includes(m.av)?m.av:'🐉';ws.fc=fcode(ws.uid);ws.hide=!!m.hide;FCM.set(ws.fc,ws);send(ws,{t:'hi',v:PROTO,min:MINPROTO,fc:ws.fc});const pm=PEND.get(ws.fc);if(pm){const l=[];pm.forEach((v,k)=>{if(Date.now()-v.ts>30*864e5)pm.delete(k);else l.push({c:k,n:v.n,a:v.a})});if(l.length)send(ws,{t:'frq',l})}return}
   if(m.t=='fq'){const l=[];(Array.isArray(m.c)?m.c.slice(0,60):[]).forEach(c=>{const w=FCM.get(String(c));if(w&&w!==ws&&!w.hide&&w.readyState===1)l.push({c:String(c),n:w.name,a:w.av,s:w.room?(w.room.started?'game':'room'):'on'})});send(ws,{t:'fs',l});return}
   if(m.t=='hide'){ws.hide=!!m.on;return}
+  if(m.t=='freq'){const now=Date.now(),tg=String(m.c||'');ws.fr=(ws.fr||[]).filter(t=>now-t<60000);if(ws.fr.length>=30||!ws.fc||!FRE.test(tg)||tg===ws.fc||DECL.has(tg+'>'+ws.fc))return;ws.fr.push(now);let pm=PEND.get(tg);if(!pm)PEND.set(tg,pm=new Map());const had=pm.has(ws.fc);if(!had&&pm.size>=30)return;pm.set(ws.fc,{n:ws.name,a:ws.av,ts:had?pm.get(ws.fc).ts:now});const w=FCM.get(tg);if(!had&&w&&w.readyState===1)send(w,{t:'frq',l:[{c:ws.fc,n:ws.name,a:ws.av}]});return}
+  if(m.t=='fres'){const from=String(m.c||''),pm=PEND.get(ws.fc);if(!pm||!pm.has(from))return;pm.delete(from);if(m.ok){const w=FCM.get(from);if(w)send(w,{t:'facc',c:ws.fc,n:ws.name,a:ws.av})}else{if(DECL.size>5000)DECL.clear();DECL.add(ws.fc+'>'+from)}return}
   if(m.t=='inv'){const now=Date.now();if(now-(ws.ia||0)<3000)return;ws.ia=now;const r=ws.room,w=FCM.get(String(m.to));if(r&&!r.started&&w&&w!==ws&&!w.hide&&w.readyState===1&&w.room!==r)send(w,{t:'inv',n:ws.name,a:ws.av,f:ws.fc,code:r.code});return}
   if(!ws.uid)return;
   if(m.t=='qm'){const sty=MINS[m.sty]?m.sty:'hk';leaveRoom(ws);qmRemove(ws);ws.qm=sty;ws.qt=Date.now();if(!qmq.has(sty))qmq.set(sty,[]);qmq.get(sty).push(ws);send(ws,{t:'qm',on:1,n:qmq.get(sty).length,ms:0});return}
@@ -104,6 +111,7 @@ wss.on('connection',ws=>{ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;w
    else{send(ws,{t:'err',msg:'That game has already started.'});return}
    ws.room=r;ws.seat=i;pushRoom(r);if(r.started){pushState(r)}return}
   const r=ws.room;if(!r)return;
+  if(m.t=='rx'){const i=m.i;if(!r.started||!Number.isInteger(i)||i<0||i>7||!(ws.seat>=0))return;const now=Date.now();if(now-(ws.rxa||0)<4500)return;ws.rxa=now;all(r,{t:'rx',p:ws.seat,i});return}
   if(m.t=='cfg'&&!r.started&&r.host===ws.uid){const c=r.cfg;
    if(MINS[m.sty]){c.sty=m.sty;c.min=MINS[m.sty].d}
    const mo=MINS[c.sty];if(mo.o.includes(m.min))c.min=m.min;
@@ -113,7 +121,7 @@ wss.on('connection',ws=>{ws.uid='';ws.name='Player';ws.av='🐉';ws.alive=true;w
   if(m.t=='resume'){const s=r.seats[ws.seat];if(s&&s.ws===ws&&s.auto){s.auto=false;s.miss=0;send(ws,{t:'auto',on:false});pushRoom(r)}return}
   if(m.t=='next'){if(r.ready){r.ready.add(ws.seat);if(r.nextChk)r.nextChk()}return}
   if(m.t=='leave'){leaveRoom(ws);send(ws,{t:'left'});return}
- });
+ }
  ws.on('close',()=>{if(ws.fc&&FCM.get(ws.fc)===ws)FCM.delete(ws.fc);qmRemove(ws);leaveRoom(ws)})});
 setInterval(()=>{wss.clients.forEach(ws=>{if(!ws.alive){ws.terminate();return}ws.alive=false;try{ws.ping()}catch(e){}})},25000);
 server.listen(PORT,()=>console.log('Pongie server on port '+PORT));
