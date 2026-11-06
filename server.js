@@ -115,7 +115,7 @@ function handleMsg(ws,m){
   if(m.t=='cfg'&&!r.started&&r.host===ws.uid){const c=r.cfg;
    if(MINS[m.sty]){c.sty=m.sty;c.min=MINS[m.sty].d}
    const mo=MINS[c.sty];if(mo.o.includes(m.min))c.min=m.min;
-   if([2,4].includes(m.len))c.len=m.len;if([1,2,3,4].includes(m.lv))c.lv=m.lv;if([1,3].includes(m.sw))c.sw=m.sw;if([0,1].includes(m.an))c.an=m.an;pushRoom(r);return}
+   if([1,2,4,16].includes(m.len))c.len=m.len;if([1,2,3,4].includes(m.lv))c.lv=m.lv;if([1,3].includes(m.sw))c.sw=m.sw;if([0,1].includes(m.an))c.an=m.an;pushRoom(r);return}
   if(m.t=='start'&&!r.started&&r.host===ws.uid){runGame(r);return}
   if(m.t=='act'){const p=r.pend[ws.seat];if(p&&p.kind==m.kind)p.fin(m.a);return}
   if(m.t=='resume'){const s=r.seats[ws.seat];if(s&&s.ws===ws&&s.auto){s.auto=false;s.miss=0;send(ws,{t:'auto',on:false});pushRoom(r)}return}
